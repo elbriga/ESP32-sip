@@ -3,6 +3,9 @@
 #include <Ticker.h>
 
 #include "classe_rtp.h"
+
+// sox assovio.wav -r 8000 -c 1 -t raw -e u-law teste.ulaw
+// xxd -i teste.ulaw > teste_audio.h
 #include "teste_audio.h"
 
 RTP::RTP(int localPort)
