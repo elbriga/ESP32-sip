@@ -1,21 +1,34 @@
 #include <WiFi.h>
 #include <AsyncUDP.h>
 #include <Ticker.h>
+#include <MD5Builder.h>
 
 #include "teste_audio.h"
+#include "classe_sip.cpp"
 
 const char* ssid = "Ligga Gabriel 2.4g";
 const char* pass = "09876543";
+
+const char* sipUser  = "esp8266";
+const char* sipPass  = "aaa";
+const char* sipServer= "192.168.18.10"; 
+
 const int LED_PIN = 2;
+const int DEBUG = 0;
 
 AsyncUDP sipUDP;   // Porta 5060 SIP
 AsyncUDP rtpUDP;   // Porta 4000 RTP/áudio
+
+IPAddress serverIP;
+int serverPort = 5060;
+bool registered = false;
 
 IPAddress lastIP;
 int       lastPort = 0;
 size_t    pos = 0;
 
 Ticker rtpTimer;
+Ticker regTimer;
 
 void sendRTP() {
   if (!lastPort) return;
@@ -53,9 +66,81 @@ void sendRTP() {
   timestamp += chunkSize; // 160 samples = 20ms @ 8kHz
 }
 
+// Função para gerar um Call-ID aleatório simples
+String callID;
+String randomCallID() {
+  return String(micros(), HEX) + "@esp8266";
+}
+
+void sendRegisterTimer() {
+  sendRegister("");
+}
+
+// Função para enviar REGISTER
+int cSeq = 0;
+void sendRegister(String authLine) {
+  String branch = "z9hG4bK-" + String(micros(), HEX);
+
+  cSeq++;
+
+  String msg =
+    "REGISTER sip:" + String(sipServer) + " SIP/2.0\r\n"
+    "Via: SIP/2.0/UDP " + WiFi.localIP().toString() + ":5060;branch=" +branch+ "\r\n"
+    "From: <sip:" + String(sipUser) + "@" + String(sipServer) + ">;tag=1234\r\n"
+    "To: <sip:" + String(sipUser) + "@" + String(sipServer) + ">\r\n"
+    "Call-ID: " + callID + "\r\n"
+    "CSeq: " + String(cSeq) + " REGISTER\r\n"
+    "Contact: <sip:" + String(sipUser) + "@" + WiFi.localIP().toString() + ":5060>\r\n"
+    "Max-Forwards: 70\r\n"
+    "Expires: 60\r\n"
+    "User-Agent: ESP8266-SIP\r\n";
+
+  if (authLine != "") msg += authLine;
+
+  msg += "Content-Length: 0\r\n\r\n";
+
+  sipUDP.writeTo((uint8_t*)msg.c_str(), msg.length(),
+                       serverIP, serverPort);
+
+  Serial.println("REGISTER enviado: " + authLine);
+  if (DEBUG) Serial.println(msg);
+}
+
+// Construir resposta digest Authorization
+String buildAuthLine(String nonce) {
+  // Digest: HA1 = MD5(username:realm:password)
+  //         HA2 = MD5(method:uri)
+  //         resp = MD5(HA1:nonce:HA2)
+
+  String realm = "asterisk";
+  String uri = "sip:" + String(sipServer);
+  String ha1 = md5(String(sipUser) + ":" + realm + ":" + sipPass);
+  String ha2 = md5("REGISTER:" + uri);
+  String response = md5(ha1 + ":" + nonce + ":" + ha2);
+
+  String auth =
+    "Authorization: Digest username=\"" + String(sipUser) + "\", realm=\"" + realm + "\", nonce=\"" + nonce + "\", uri=\"" + uri + "\", response=\"" + response + "\", algorithm=MD5\r\n";
+  return auth;
+}
+
+// Pequeno helper para MD5
+String md5(String s) {
+  MD5Builder md5;
+
+  md5.begin();
+  md5.add(s);
+  md5.calculate();
+
+  return md5.toString();
+}
+
 void setup() {
   Serial.begin(115200);
+
   pinMode(LED_PIN, OUTPUT);
+
+  serverIP.fromString(sipServer);
+  callID = randomCallID();
 
   // agenda RTP a cada 20ms
   rtpTimer.attach_ms(20, sendRTP);
@@ -91,7 +176,24 @@ void setup() {
 
       String response = "";
 
-      if (msg.startsWith("OPTIONS")) {
+      if (msg.startsWith("SIP/2.0 401")) {
+        // extrai nonce
+        int n1 = msg.indexOf("nonce=\"");
+        if (n1 != -1) {
+          int n2 = msg.indexOf("\"", n1+7);
+          String nonce = msg.substring(n1+7, n2);
+          Serial.println("Desafio recebido, nonce=" + nonce);
+
+          sendRegister(buildAuthLine(nonce));
+        }
+      }
+
+      else if (msg.startsWith("SIP/2.0 200 OK") && msg.indexOf("CSeq: " + String(cSeq) + " REGISTER") != -1) {
+        registered = true;
+        Serial.println("Registrado com sucesso!");
+      }
+
+      else if (msg.startsWith("OPTIONS")) {
         response = String("SIP/2.0 200 OK\r\n");
         response += "Via: " + via + "\r\n";
         response += "From: " + from + "\r\n";
@@ -147,6 +249,9 @@ void setup() {
                        packet.remoteIP(), packet.remotePort());
       }
     });
+
+    // agenda RTP a cada 20ms
+    regTimer.attach_ms(30000, sendRegisterTimer);
   }
 
   // --- RTP UDP ---
