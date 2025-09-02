@@ -3,113 +3,214 @@
 #include <Ticker.h>
 #include <MD5Builder.h>
 
+extern const int DEBUG;
+
 class SIPClient {
 private:
+  String user, pass, server;
+  int localPort, serverPort;
+
+  IPAddress serverIP;
   AsyncUDP udp;
-  String user, pass, server, localIP, callID;
-  int port;
-  uint32_t cseq;
-  bool registered;
+  uint32_t cSeq;
+  bool registered, emLigacao;
+  String localIP, callID;
+
   Ticker registerTimer;
 
 public:
-  SIPClient(const char* user, const char* pass, const char* server, int port = 5060)
-    : user(user), pass(pass), server(server), port(port), cseq(1), registered(false) {
+  SIPClient(const char* user, const char* pass, const char* server, int serverPort = 5060, int localPort = 5060)
+    : user(user), pass(pass), server(server), serverPort(serverPort), localPort(localPort), cSeq(0), registered(false) {
+    serverIP.fromString(this->server);
     callID = String(random(10000, 99999)) + "@esp32";
+    emLigacao = false;
   }
 
   void begin() {
     localIP = WiFi.localIP().toString();
-    if (udp.listen(port)) {
-      Serial.println("SIP UDP escutando na porta " + String(port));
+
+    if (udp.listen(localPort)) {
+      Serial.println("SIP UDP escutando na porta " + String(localPort));
+
       udp.onPacket([this](AsyncUDPPacket packet) {
         this->handlePacket(packet);
       });
-      sendRegister();
+
+      sendRegister("");
+
+      // 🔥 aqui o lambda resolve o problema
+      registerTimer.attach_ms(30000, [this]() {
+        this->sendRegister("");
+      });
     }
   }
 
-private:
-  void sendRegister(const char* authHeader = nullptr) {
-    String msg = "REGISTER sip:" + server + " SIP/2.0\r\n";
-    msg += "Via: SIP/2.0/UDP " + localIP + ":5060;branch=z9hG4bK-1234\r\n";
-    msg += "Max-Forwards: 70\r\n";
-    msg += "From: <sip:" + user + "@" + server + ">;tag=1234\r\n";
-    msg += "To: <sip:" + user + "@" + server + ">\r\n";
-    msg += "Call-ID: " + callID + "\r\n";
-    msg += "CSeq: " + String(cseq++) + " REGISTER\r\n";
-    msg += "Contact: <sip:" + user + "@" + localIP + ":5060>\r\n";
-    msg += "Expires: 60\r\n";
-    if (authHeader) msg += String(authHeader);
-    msg += "Content-Length: 0\r\n\r\n";
-
-    udp.writeTo((uint8_t*)msg.c_str(), msg.length(),
-                IPAddress().fromString(server), port);
-
-    Serial.println("REGISTER enviado:");
-    Serial.println(msg);
+  bool getEmLigacao() {
+    return emLigacao;
+  }
+  bool getRegistered() {
+    return registered;
   }
 
-  String computeDigestAuth(String method, String uri, String realm, String nonce) {
-    String ha1, ha2, resp;
+private:
+  void sendRegister(String authLine) {
+    String branch = "z9hG4bK-" + String(micros(), HEX);
+
+    cSeq++;
+
+    String msg =
+      "REGISTER sip:" + server + " SIP/2.0\r\n"
+      "Via: SIP/2.0/UDP " + localIP + ":" + String(localPort) + ";branch=" +branch+ "\r\n"
+      "From: <sip:" + user + "@" + server + ">;tag=1234\r\n"
+      "To: <sip:" + user + "@" + server + ">\r\n"
+      "Call-ID: " + callID + "\r\n"
+      "CSeq: " + String(cSeq) + " REGISTER\r\n"
+      "Contact: <sip:" + user + "@" + localIP + ":" + String(localPort) + ">\r\n"
+      "Max-Forwards: 10\r\n"
+      "Expires: 60\r\n"
+      "User-Agent: ESP8266-SIP\r\n";
+
+    if (authLine != "")
+      msg += authLine;
+
+    msg += "Content-Length: 0\r\n\r\n";
+
+    udp.writeTo((uint8_t*)msg.c_str(), msg.length(), serverIP, serverPort);
+
+    Serial.println("REGISTER enviado: " + authLine);
+    if (DEBUG) Serial.println(msg);
+  }
+
+  // Pequeno helper para MD5
+  String md5(String s) {
     MD5Builder md5;
 
     md5.begin();
-    md5.add(user + ":" + realm + ":" + pass);
+    md5.add(s);
     md5.calculate();
-    ha1 = md5.toString();
 
-    md5.begin();
-    md5.add(method + ":" + uri);
-    md5.calculate();
-    ha2 = md5.toString();
+    return md5.toString();
+  }
 
-    md5.begin();
-    md5.add(ha1 + ":" + nonce + ":" + ha2);
-    md5.calculate();
-    resp = md5.toString();
+  // Construir resposta digest Authorization
+  String buildAuthLine(String nonce) {
+    // Digest: HA1 = MD5(username:realm:password)
+    //         HA2 = MD5(method:uri)
+    //         resp = MD5(HA1:nonce:HA2)
 
-    String hdr = "Authorization: Digest username=\"" + user + "\", realm=\"" + realm +
-                 "\", nonce=\"" + nonce + "\", uri=\"" + uri + "\", response=\"" + resp + "\"\r\n";
-    return hdr;
+    String realm = "asterisk";
+    String uri = "sip:" + server;
+    String ha1 = md5(user + ":" + realm + ":" + pass);
+    String ha2 = md5("REGISTER:" + uri);
+    String response = md5(ha1 + ":" + nonce + ":" + ha2);
+
+    String auth =
+      "Authorization: Digest username=\"" + user +
+      "\", realm=\"" + realm + "\", nonce=\"" + nonce + "\", uri=\"" + uri +
+      "\", response=\"" + response + "\", algorithm=MD5\r\n";
+    
+    return auth;
   }
 
   void handlePacket(AsyncUDPPacket packet) {
     String msg = (const char*)packet.data();
+    msg.trim();
+
     Serial.println("SIP recebido:");
-    Serial.println(msg);
+    if (DEBUG) Serial.println(msg);
+    else {
+      int idx = msg.indexOf("\r\n");
+      Serial.println(" > " + msg.substring(0, idx));
+    }
+
+    auto extractHeader = [&](const char* name) -> String {
+        int idx = msg.indexOf(name);
+        if (idx == -1) return "";
+        int end = msg.indexOf("\r\n", idx);
+        return msg.substring(idx + strlen(name), end);
+      };
+    
+    String via    = extractHeader("Via: ");
+    String from   = extractHeader("From: ");
+    String to     = extractHeader("To: ");
+    String callID = extractHeader("Call-ID: ");
+    String cseq   = extractHeader("CSeq: ");
+
+    String response = "";
 
     if (msg.startsWith("SIP/2.0 401")) {
-      int r1 = msg.indexOf("realm=\"");
-      int r2 = msg.indexOf("\"", r1 + 7);
-      String realm = msg.substring(r1 + 7, r2);
-
+      // extrai nonce
       int n1 = msg.indexOf("nonce=\"");
-      int n2 = msg.indexOf("\"", n1 + 7);
-      String nonce = msg.substring(n1 + 7, n2);
+      if (n1 != -1) {
+        int n2 = msg.indexOf("\"", n1+7);
+        String nonce = msg.substring(n1+7, n2);
+        Serial.println("Desafio recebido, nonce=" + nonce);
 
-      String auth = computeDigestAuth("REGISTER", "sip:" + server, realm, nonce);
-      sendRegister(auth.c_str());
-    }
-    else if (msg.startsWith("SIP/2.0 200 OK")) {
-      if (msg.indexOf("REGISTER") > 0) {
-        Serial.println("REGISTER OK! Registrado no servidor SIP.");
-        registered = true;
-        registerTimer.detach();
-        registerTimer.attach(50, [this]() { sendRegister(); });
+        sendRegister(buildAuthLine(nonce));
       }
     }
+
+    else if (msg.startsWith("SIP/2.0 200 OK") && msg.indexOf("CSeq: " + String(cSeq) + " REGISTER") != -1) {
+      registered = true;
+      Serial.println("Registrado com sucesso!");
+    }
+
     else if (msg.startsWith("OPTIONS")) {
-      Serial.println("Respondendo OPTIONS...");
-      // aqui poderia implementar resposta 200 OK
+      response = String("SIP/2.0 200 OK\r\n");
+      response += "Via: " + via + "\r\n";
+      response += "From: " + from + "\r\n";
+      response += "To: " + to + "\r\n";
+      response += "Call-ID: " + callID + "\r\n";
+      response += "CSeq: " + cseq + "\r\n";
+      response += "Allow: INVITE, OPTIONS, BYE\r\n";
+      response += "Content-Length: 0\r\n\r\n";
+
+      Serial.println("Respondido 200 OK ao OPTIONS");
     }
+
     else if (msg.startsWith("INVITE")) {
-      Serial.println("Recebido INVITE (não tratado ainda).");
-      // aqui poderia implementar resposta 200 OK com SDP
+      // Aceita qualquer INVITE para teste
+      String sdp = 
+        "v=0\r\n"
+        "o=- 0 0 IN IP4 " + localIP + "\r\n"
+        "s=ESP32 SIP\r\n"
+        "c=IN IP4 " + localIP + "\r\n"
+        "t=0 0\r\n"
+        "m=audio 4000 RTP/AVP 0\r\n"
+        "a=rtpmap:0 PCMU/8000\r\n";
+
+      response = String("SIP/2.0 200 OK\r\n");
+      response += "Via: " + via + "\r\n";
+      response += "From: " + from + "\r\n";
+      response += "To: " + to + "\r\n";
+      response += "Call-ID: " + callID + "\r\n";
+      response += "CSeq: " + cseq + "\r\n";
+      response += "Contact: <sip:esp32@" + localIP + ":5060>\r\n";
+      response += "Content-Type: application/sdp\r\n";
+      response += "Content-Length: " + String(sdp.length()) + "\r\n\r\n";
+      response += sdp;
+
+      emLigacao = true;
+      Serial.println("Respondido 200 OK ao INVITE");
     }
+    
     else if (msg.startsWith("BYE")) {
-      Serial.println("Recebido BYE.");
-      // aqui poderia encerrar chamada
+      response = String("SIP/2.0 200 OK\r\n");
+      response += "Via: " + via + "\r\n";
+      response += "From: " + from + "\r\n";
+      response += "To: " + to + "\r\n";
+      response += "Call-ID: " + callID + "\r\n";
+      response += "CSeq: " + cseq + "\r\n";
+      response += "Content-Length: 0\r\n\r\n";
+
+      emLigacao = false;
+      Serial.println("Respondido 200 OK ao BYE, chamada encerrada");
+    }
+
+    yield();
+
+    if (response != "") {
+      udp.writeTo((uint8_t*)response.c_str(), response.length(), serverIP, serverPort);
     }
   }
 };
