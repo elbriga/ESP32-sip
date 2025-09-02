@@ -3,6 +3,8 @@
 #include <Ticker.h>
 #include <MD5Builder.h>
 
+#include "classe_rtp.h"
+
 extern const int DEBUG;
 
 class SIPClient {
@@ -12,6 +14,10 @@ private:
 
   IPAddress serverIP;
   AsyncUDP udp;
+
+  int rtpPort;
+  RTP rtp;
+
   uint32_t cSeq;
   bool registered, emLigacao;
   String localIP, callID;
@@ -19,7 +25,7 @@ private:
   Ticker registerTimer;
 
 public:
-  SIPClient(const char* user, const char* pass, const char* server, int serverPort = 5060, int localPort = 5060);
+  SIPClient(const char* user, const char* pass, const char* server, int rtpPort, int serverPort = 5060, int localPort = 5060);
   void begin();
   bool getEmLigacao();
   bool getRegistered();

@@ -9,8 +9,7 @@
 const char* ssid = "Ligga Gabriel 2.4g";
 const char* pass = "09876543";
 
-SIPClient sip("esp32dev", "aaa", "192.168.18.10");
-RTP rtp(4000);
+SIPClient sip("esp32dev", "aaa", "192.168.18.10", 4000);
 
 const int LED_PIN = 2;
 const int DEBUG = 0;
@@ -27,8 +26,6 @@ void setup() {
   Serial.println("\nWiFi conectado. IP: " + WiFi.localIP().toString());
 
   sip.begin();
-
-  rtp.begin();
 }
 
 void loop() {

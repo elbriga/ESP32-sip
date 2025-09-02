@@ -4,9 +4,10 @@
 #include <MD5Builder.h>
 
 #include "classe_sip.h"
+#include "classe_rtp.h"
 
-SIPClient::SIPClient(const char* user, const char* pass, const char* server, int serverPort, int localPort)
-  : user(user), pass(pass), server(server), serverPort(serverPort), localPort(localPort), cSeq(0), registered(false) {
+SIPClient::SIPClient(const char* user, const char* pass, const char* server, int rtpPort, int serverPort, int localPort)
+  : user(user), pass(pass), server(server), rtpPort(rtpPort), rtp(rtpPort), serverPort(serverPort), localPort(localPort), cSeq(0), registered(false) {
   serverIP.fromString(this->server);
   callID = String(random(10000, 99999)) + "@esp32";
   emLigacao = false;
@@ -29,6 +30,8 @@ void SIPClient::begin() {
       this->sendRegister("");
     });
   }
+
+  rtp.begin();
 }
 
 bool SIPClient::getEmLigacao() {
