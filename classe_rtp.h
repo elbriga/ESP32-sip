@@ -2,25 +2,25 @@
 #include <AsyncUDP.h>
 #include <Ticker.h>
 
-// forward declaration do teste_audio
-extern const unsigned char teste_ulaw[];
-extern const size_t teste_ulaw_len;
-
-class RTP {
+class RTPPlayer {
 private:
   int localPort;
   AsyncUDP udp;
   Ticker rtpTimer;
 
-  IPAddress lastIP;
-  int lastPort;
+  IPAddress remoteIP;
+  int remotePort;
+
+  unsigned char *audio;
+  int audioLength;
 
   const int chunkSize = 160; // 20ms @ 8000Hz u-law
   size_t pos;
 
 public:
-  RTP(int localPort = 4000);
-  void begin();
+  RTPPlayer();
+  void start(int localRtpPort, String remoteIP, int remoteRtpPort, unsigned char *audio, int audioLength);
+  void stop();
 
 private:
   void handlePacket(AsyncUDPPacket packet);

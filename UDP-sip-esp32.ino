@@ -3,13 +3,12 @@
 #include <Ticker.h>
 #include <MD5Builder.h>
 
-#include "classe_rtp.h"
 #include "classe_sip.h"
 
 const char* ssid = "Ligga Gabriel 2.4g";
 const char* pass = "09876543";
 
-SIPClient sip("esp32dev", "aaa", "192.168.18.10", 4000);
+SIPClient sip("esp32dev", "aaa", "192.168.18.10", 5060, 5060, 4000);
 
 const int LED_PIN = 2;
 const int DEBUG = 0;

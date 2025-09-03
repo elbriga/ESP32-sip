@@ -4,15 +4,15 @@
 
 #include "classe_rtp.h"
 
-// sox assovio.wav -r 8000 -c 1 -t raw -e u-law teste.ulaw
-// xxd -i teste.ulaw > teste_audio.h
-#include "teste_audio.h"
+RTPPlayer::RTPPlayer() : remotePort(0), pos(0) {}
 
-RTP::RTP(int localPort)
-  : localPort(localPort), lastPort(0), pos(0) {
-}
+void RTPPlayer::start(int localRtpPort, String remoteIP, int remoteRtpPort, unsigned char *audio, int audioLength) {
+  this->localPort = localRtpPort;
+  this->remoteIP.fromString(remoteIP);
+  this->remotePort = remoteRtpPort;
+  this->audio = audio;
+  this->audioLength = audioLength;
 
-void RTP::begin() {
   if (udp.listen(localPort)) {
     Serial.println("RTP UDP escutando na porta " + String(localPort));
 
@@ -20,25 +20,30 @@ void RTP::begin() {
       this->handlePacket(packet);
     });
 
-    // 🔥 aqui o lambda resolve o problema
     rtpTimer.attach_ms(20, [this]() {
       this->sendRTP();
     });
   }
 }
 
-void RTP::handlePacket(AsyncUDPPacket packet) {
-  if (!lastPort) {
-    lastIP   = packet.remoteIP();
-    lastPort = packet.remotePort();
+void RTPPlayer::stop() {
+  rtpTimer.detach();
+
+  remotePort = 0;
+  pos = 0;
+}
+
+void RTPPlayer::handlePacket(AsyncUDPPacket packet) {
+  if (false) {
+    remoteIP   = packet.remoteIP();
+    remotePort = packet.remotePort();
   }
 }
 
-void RTP::sendRTP() {
-  if (!lastPort) return;
-
+void RTPPlayer::sendRTP() {
+  if (!remotePort) return;
   
-  if (pos + chunkSize > teste_ulaw_len) {
+  if (pos + chunkSize > audioLength) {
     pos = 0;
   }
 
@@ -61,9 +66,10 @@ void RTP::sendRTP() {
   packet[10] = 0x56;
   packet[11] = 0x78;
 
-  memcpy(packet + 12, teste_ulaw + pos, chunkSize);
+  memcpy(packet + 12, audio + pos, chunkSize);
 
-  udp.writeTo(packet, sizeof(packet), lastIP, lastPort);
+  Serial.println(String("RTP para ") + remoteIP + ":" + String(remotePort));
+  udp.writeTo(packet, sizeof(packet), remoteIP, remotePort);
 
   pos += chunkSize;
   seq++;
